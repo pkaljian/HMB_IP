@@ -108,12 +108,17 @@
   <script>
   /* ===================== CONFIG — EDIT THESE ===================== */
   const CONFIG = {
-    // Load the layer straight from the AGOL portal item (no service URL needed).
-    portalItemId: "b9702958420446f78dfdc370c9fc5b4c",
+    // The WEB MAP supplies all the visible context layers (parcels, zoning,
+    // land use, etc.) exactly as arranged in AGOL.
+    webMapId: "b9702958420446f78dfdc370c9fc5b4c",
 
-    // Which sublayer in the feature service (0 is the first/usual one).
-    // If the map loads but shows the wrong data, try 1, 2, ...
-    layerId: 0,
+    // The layer that drives the scroll + fly-to. Matched by title inside the
+    // web map; if that fails, the direct service URL below is used as backup.
+    layerTitle: "Identified Conflicts",
+    serviceUrl: "https://services3.arcgis.com/DekmcG0oYPlmT2HS/arcgis/rest/services/Identified_Conflicts/FeatureServer",
+
+    // Emphasize the active conflict polygon (outline) without hiding context.
+    emphasizeActiveLayer: true,
 
     // Field names — MUST match the published layer's field names exactly.
     // AGOL usually sanitizes on publish (spaces/parentheses -> underscores).
@@ -136,54 +141,86 @@
   /* ============================================================== */
 
   require([
+    "esri/WebMap",
     "esri/Map",
     "esri/views/MapView",
     "esri/layers/FeatureLayer",
     "esri/Graphic",
     "esri/geometry/Extent"
-  ], function (Map, MapView, FeatureLayer, Graphic, Extent) {
+  ], function (WebMap, Map, MapView, FeatureLayer, Graphic, Extent) {
 
     const F = CONFIG.fields;
 
-    const map = new Map({ basemap: CONFIG.basemap });
-    const view = new MapView({
-      container: "viewDiv",
-      map: map,
-      constraints: { snapToZoom: false },
-      ui: { components: ["zoom", "attribution"] }
-    });
-
-    let layer = null;
-    let activeHandle = null;
+    let map, view, layer = null, activeHandle = null;
 
     function isNull(v) {
       return v === null || v === undefined || v === "" || v === CONFIG.nullToken;
     }
 
-    // Load the layer directly from the portal item. The SDK resolves the
-    // service URL internally — no manual arcgis.com metadata request needed.
-    layer = new FeatureLayer({
-      portalItem: { id: CONFIG.portalItemId },
-      layerId: CONFIG.layerId,        // which sublayer (0 by default)
-      outFields: ["*"],
-      renderer: {
-        type: "simple",
-        symbol: {
-          type: "simple-fill",
-          color: [200, 71, 43, 0.18],
-          outline: { color: [200, 71, 43, 1], width: 1.5 }
-        }
+    const HIGHLIGHT = {
+      type: "simple",
+      symbol: {
+        type: "simple-fill",
+        color: [200, 71, 43, 0.18],
+        outline: { color: [200, 71, 43, 1], width: 1.5 }
       }
-    });
-    map.add(layer);
+    };
+
+    if (CONFIG.serviceUrl) { /* serviceUrl kept only as fallback below */ }
+
+    // Always load the full web map so every context layer is visible.
+    map = new WebMap({ portalItem: { id: CONFIG.webMapId } });
+    view = makeView();
 
     view.when(function () {
-      return layer.when(loadFeatures);
-    }).catch(function (err) {
+      const want = CONFIG.layerTitle.toLowerCase();
+      let found = map.layers.find(l => (l.title || "").toLowerCase() === want)
+               || map.layers.find(l => (l.title || "").toLowerCase().indexOf(want) !== -1);
+
+      if (found) {
+        layer = found;
+        layer.outFields = ["*"];
+        if (CONFIG.emphasizeActiveLayer) {
+          // give the driver layer a clean outline so the highlight reads on top
+          // of the context layers (does not hide anything beneath it)
+          layer.renderer = {
+            type: "simple",
+            symbol: {
+              type: "simple-fill",
+              color: [200, 71, 43, 0.12],
+              outline: { color: [200, 71, 43, 0.9], width: 1.25 }
+            }
+          };
+        }
+        return layer.when(loadFeatures);
+      }
+
+      // Fallback: layer not found in the web map — add the service URL on top.
+      if (CONFIG.serviceUrl && CONFIG.serviceUrl.trim()) {
+        const base = CONFIG.serviceUrl.trim().replace(/\/+$/, "");
+        layer = new FeatureLayer({ url: base + "/0", outFields: ["*"], renderer: HIGHLIGHT });
+        map.add(layer);
+        return layer.when(loadFeatures);
+      }
+
+      const names = map.layers.map(l => l.title).toArray().join(", ");
+      showLayerError(new Error('Layer "' + CONFIG.layerTitle + '" not found. Layers in this map: ' + names));
+    }).catch(showLayerError);
+
+    function makeView() {
+      return new MapView({
+        container: "viewDiv",
+        map: map,
+        constraints: { snapToZoom: false },
+        ui: { components: ["zoom", "attribution"] }
+      });
+    }
+
+    function showLayerError(err) {
       document.getElementById("steps").innerHTML =
         '<div class="loading">Could not load the layer: ' + (err && err.message ? err.message : err) +
-        '<br><br>Check that item <code>' + CONFIG.portalItemId + '</code> is shared publicly.</div>';
-    });
+        '</div>';
+    }
 
     function loadFeatures() {
       const q = layer.createQuery();
