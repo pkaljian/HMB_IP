@@ -171,13 +171,15 @@
     "esri/Map",
     "esri/views/MapView",
     "esri/layers/FeatureLayer",
+    "esri/layers/GraphicsLayer",
     "esri/Graphic",
     "esri/geometry/Extent"
-  ], function (WebMap, Map, MapView, FeatureLayer, Graphic, Extent) {
+  ], function (WebMap, Map, MapView, FeatureLayer, GraphicsLayer, Graphic, Extent) {
 
     const F = CONFIG.fields;
 
-    let map, view, layer = null, activeHandle = null;
+    let map, view, layer = null;
+    let selLayer = null;   // graphics overlay for the bold active-polygon outline
     let ALL_FEATS = [];
     const OID_TO_INDEX = {};
     let suppressScrollFly = false;   // avoid double fly when a click scrolls a card
@@ -210,14 +212,13 @@
         layer = found;
         layer.outFields = ["*"];
         if (CONFIG.emphasizeActiveLayer) {
-          // give the driver layer a clean outline so the highlight reads on top
-          // of the context layers (does not hide anything beneath it)
+          // base style for ALL conflict polygons: faint, so the active one pops
           layer.renderer = {
             type: "simple",
             symbol: {
               type: "simple-fill",
-              color: [0, 68, 124, 0.10],
-              outline: { color: [0, 68, 124, 0.85], width: 1.25 }
+              color: [0, 68, 124, 0.06],
+              outline: { color: [0, 68, 124, 0.45], width: 1 }
             }
           };
         }
@@ -241,11 +242,6 @@
         container: "viewDiv",
         map: map,
         constraints: { snapToZoom: false },
-        highlightOptions: {
-          color: [200, 155, 60, 1],     // HMB gold for the active polygon
-          haloOpacity: 0.9,
-          fillOpacity: 0.25
-        },
         ui: { components: ["zoom", "attribution"] }
       });
     }
@@ -277,6 +273,9 @@
         });
         // popups disabled — the cards carry the info; clicks just zoom + activate
         layer.popupEnabled = false;
+        // overlay that draws the bold outline for the active polygon (sits on top)
+        selLayer = new GraphicsLayer({ title: "__selection", listMode: "hide" });
+        map.add(selLayer);
         buildCards(feats);
         wireScrollama(feats);
         wireMapClick();
@@ -376,11 +375,34 @@
       if (!geom) return;
       const ext = geom.extent ? geom.extent.clone().expand(CONFIG.zoomPadding) : null;
       view.goTo(ext || geom, { duration: CONFIG.flyDuration, easing: "ease-in-out" }).catch(()=>{});
+      drawSelection(geom);
+    }
 
-      // Emphasize the active polygon.
-      view.whenLayerView(layer).then(function (lv) {
-        if (activeHandle) { activeHandle.remove(); activeHandle = null; }
-        activeHandle = lv.highlight(feature);
+    // Draw the active polygon with a layered outline: a soft wide gold glow
+    // underneath, then a crisp bright border on top, and no fill — so the
+    // selection reads as a bright, dimensional ring (no graying out).
+    function drawSelection(geom) {
+      if (!selLayer) return;
+      selLayer.removeAll();
+
+      // Stack of outline rings from widest+softest to thinnest+brightest.
+      // This fakes a gradient-edged glow that the SDK can't do with one stroke.
+      const rings = [
+        { color: [200, 155, 60, 0.18], width: 11 },  // outer glow (faint gold)
+        { color: [200, 155, 60, 0.35], width: 7  },  // mid glow
+        { color: [232, 178, 70, 0.85], width: 4  },  // bright gold body
+        { color: [255, 214, 110, 1],   width: 2  }   // hot inner highlight
+      ];
+
+      rings.forEach(function (r) {
+        selLayer.add(new Graphic({
+          geometry: geom,
+          symbol: {
+            type: "simple-fill",
+            color: [0, 0, 0, 0],                 // no fill — nothing grays out
+            outline: { color: r.color, width: r.width }
+          }
+        }));
       });
     }
 
