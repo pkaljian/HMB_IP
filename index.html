@@ -11,11 +11,16 @@
   <style>
     :root {
       --panel-width: 420px;
-      --accent: #c8472b;
+      /* City of Half Moon Bay palette */
+      --hmb-navy: #00447c;        /* primary brand color */
+      --hmb-navy-dark: #002f57;
+      --hmb-gold: #c89b3c;        /* warm coastal accent */
+      --accent: var(--hmb-navy);  /* active state / numbers */
+      --accent-2: var(--hmb-gold);
       --card-bg: #ffffff;
-      --page-bg: #f4f1ec;
-      --text: #1f2421;
-      --muted: #6b6b6b;
+      --page-bg: #eef2f6;         /* cool off-white */
+      --text: #1c2b3a;
+      --muted: #5f7184;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: var(--text); }
@@ -37,15 +42,27 @@
     }
     #viewDiv { width: 100%; height: 100%; }
 
+    /* Branded header */
+    #brandbar {
+      background: var(--hmb-navy);
+      color: #fff;
+      padding: 14px 28px;
+      display: flex; align-items: center; gap: 14px;
+      border-bottom: 3px solid var(--hmb-gold);
+    }
+    #brandbar .titles { line-height: 1.2; }
+    #brandbar .city { font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em; }
+    #brandbar .sub  { font-size: 0.72rem; opacity: 0.85; text-transform: uppercase; letter-spacing: 0.06em; }
+
     /* Intro / cover */
     .intro {
       padding: 28px 28px 10px 28px;
-      min-height: 60vh;
+      min-height: 56vh;
       display: flex; flex-direction: column; justify-content: flex-end;
     }
-    .intro h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 10px; }
+    .intro h1 { font-size: 2rem; line-height: 1.15; margin: 0 0 10px; color: var(--hmb-navy); }
     .intro p  { color: var(--muted); margin: 0; }
-    .intro .hint { margin-top: 18px; font-size: 0.85rem; color: var(--accent); letter-spacing: 0.04em; text-transform: uppercase; }
+    .intro .hint { margin-top: 18px; font-size: 0.85rem; color: var(--accent); letter-spacing: 0.04em; text-transform: uppercase; font-weight: 600; }
 
     /* Cards */
     .step {
@@ -59,8 +76,8 @@
       opacity: 0.55;
     }
     .step.is-active {
-      border-left-color: var(--accent);
-      box-shadow: 0 6px 26px rgba(0,0,0,0.16);
+      border-left-color: var(--accent-2);
+      box-shadow: 0 6px 26px rgba(0,68,124,0.18);
       opacity: 1;
       transform: translateY(-2px);
     }
@@ -70,9 +87,11 @@
       background: var(--accent); color: #fff; font-weight: 700; font-size: 0.9rem;
       margin-bottom: 12px;
     }
-    .step h2 { font-size: 1.15rem; margin: 0 0 8px; }
-    .step .meta { font-size: 0.78rem; color: var(--muted); margin: 0 0 12px; text-transform: uppercase; letter-spacing: 0.03em; }
-    .step .desc { font-size: 0.95rem; line-height: 1.5; margin: 0; }
+    .step h2 { font-size: 1.15rem; margin: 0 0 8px; color: var(--hmb-navy); }
+    .step .meta { font-size: 0.85rem; color: var(--text); margin: 0 0 12px; line-height: 1.4; }
+    .step .meta .from { color: var(--muted); }
+    .step .meta .to { color: var(--hmb-navy); font-weight: 600; }
+    .step .desc { font-size: 0.95rem; line-height: 1.5; margin: 0; color: var(--text); }
     .step .desc.null { color: var(--muted); font-style: italic; }
 
     .loading { padding: 28px; color: var(--muted); }
@@ -88,9 +107,15 @@
 <body>
   <div id="app">
     <div id="scroll-col">
+      <div id="brandbar">
+        <div class="titles">
+          <div class="city">City of Half Moon Bay</div>
+          <div class="sub">Local Coastal Land Use Plan</div>
+        </div>
+      </div>
       <div class="intro">
         <h1>Identified Zoning Conflicts</h1>
-        <p>Half Moon Bay — Local Coastal Land Use Plan. Scroll to move through each site; the map flies to each parcel.</p>
+        <p>As part of updating the Local Coastal Land Use Plan, the City identified parcels where current zoning differs from the proposed land use. Scroll through each site below — the map flies to the parcel and shows the surrounding context.</p>
         <div class="hint">Scroll to begin ↓</div>
       </div>
       <div id="steps"><div class="loading">Loading sites…</div></div>
@@ -129,8 +154,9 @@
       title:      "Site_Name",          // String — card heading
       titleFallback: "Item_Number",     // used when Site_Name is null/blank
       description:"Notes",              // String — card body
-      // optional extra line under the title (set to null to hide):
-      meta:       "Proposed_Zoning"     // String
+      // zoning-change line under the title:
+      existingZoning: "Existing_Zoning",  // String
+      proposedZoning: "Proposed_Zoning"   // String
     },
 
     nullToken: "<null>",                 // value used in the data for gaps
@@ -152,6 +178,9 @@
     const F = CONFIG.fields;
 
     let map, view, layer = null, activeHandle = null;
+    let ALL_FEATS = [];
+    const OID_TO_INDEX = {};
+    let suppressScrollFly = false;   // avoid double fly when a click scrolls a card
 
     function isNull(v) {
       return v === null || v === undefined || v === "" || v === CONFIG.nullToken;
@@ -161,8 +190,8 @@
       type: "simple",
       symbol: {
         type: "simple-fill",
-        color: [200, 71, 43, 0.18],
-        outline: { color: [200, 71, 43, 1], width: 1.5 }
+        color: [0, 68, 124, 0.15],
+        outline: { color: [0, 68, 124, 1], width: 1.5 }
       }
     };
 
@@ -187,8 +216,8 @@
             type: "simple",
             symbol: {
               type: "simple-fill",
-              color: [200, 71, 43, 0.12],
-              outline: { color: [200, 71, 43, 0.9], width: 1.25 }
+              color: [0, 68, 124, 0.10],
+              outline: { color: [0, 68, 124, 0.85], width: 1.25 }
             }
           };
         }
@@ -212,6 +241,11 @@
         container: "viewDiv",
         map: map,
         constraints: { snapToZoom: false },
+        highlightOptions: {
+          color: [200, 155, 60, 1],     // HMB gold for the active polygon
+          haloOpacity: 0.9,
+          fillOpacity: 0.25
+        },
         ui: { components: ["zoom", "attribution"] }
       });
     }
@@ -236,8 +270,16 @@
             '<div class="loading">No features returned. Check the field names in CONFIG match the layer.</div>';
           return;
         }
+        ALL_FEATS = feats;
+        // map OBJECTID -> card index, for syncing map clicks to cards
+        feats.forEach(function (f, i) {
+          OID_TO_INDEX[f.attributes[F.objectId]] = i;
+        });
+        // popups disabled — the cards carry the info; clicks just zoom + activate
+        layer.popupEnabled = false;
         buildCards(feats);
         wireScrollama(feats);
+        wireMapClick();
         view.goTo(feats.map(f => f.geometry)).catch(()=>{});
       }).catch(function (err) {
         document.getElementById("steps").innerHTML =
@@ -253,6 +295,23 @@
       return "Site " + attr[F.titleFallback];
     }
 
+    function zoningChangeHtml(existZ, propZ) {
+      const haveE = !isNull(existZ);
+      const haveP = !isNull(propZ);
+      if (haveE && haveP) {
+        return 'Currently <span class="from">' + escapeHtml(existZ) +
+               '</span>, would change to <span class="to">' + escapeHtml(propZ) + '</span>';
+      }
+      if (haveE && !haveP) {
+        return 'Currently <span class="from">' + escapeHtml(existZ) +
+               '</span>; proposed zoning to be determined';
+      }
+      if (!haveE && haveP) {
+        return 'Would change to <span class="to">' + escapeHtml(propZ) + '</span>';
+      }
+      return null; // both missing — hide the line
+    }
+
     function buildCards(feats) {
       const wrap = document.getElementById("steps");
       wrap.innerHTML = "";
@@ -263,19 +322,52 @@
         div.dataset.index = i;
 
         const num = !isNull(a[F.orderBy]) ? a[F.orderBy] : (i + 1);
-        const metaVal = (F.meta && !isNull(a[F.meta])) ? a[F.meta] : null;
+        const existZ = a[F.existingZoning];
+        const propZ  = a[F.proposedZoning];
+        const metaHtml = zoningChangeHtml(existZ, propZ);
         const descVal = a[F.description];
         const descNull = isNull(descVal);
 
         div.innerHTML =
           '<span class="num">' + num + '</span>' +
           '<h2>' + escapeHtml(cardTitle(a)) + '</h2>' +
-          (metaVal ? '<p class="meta">' + escapeHtml(metaVal) + '</p>' : '') +
+          (metaHtml ? '<p class="meta">' + metaHtml + '</p>' : '') +
           '<p class="desc' + (descNull ? ' null' : '') + '">' +
             escapeHtml(descNull ? "No description available." : descVal) +
           '</p>';
 
         wrap.appendChild(div);
+      });
+    }
+
+    function activateIndex(i, opts) {
+      opts = opts || {};
+      const steps = document.querySelectorAll("#steps .step");
+      if (i < 0 || i >= steps.length) return;
+      steps.forEach(s => s.classList.remove("is-active"));
+      const el = steps[i];
+      el.classList.add("is-active");
+      if (opts.scrollIntoView) {
+        suppressScrollFly = true;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        // release the guard after the smooth scroll settles
+        setTimeout(function () { suppressScrollFly = false; }, 700);
+      }
+      if (opts.fly !== false) flyTo(ALL_FEATS[i]);
+    }
+
+    function wireMapClick() {
+      view.on("click", function (event) {
+        view.hitTest(event).then(function (resp) {
+          const hit = resp.results.find(r =>
+            r.graphic && r.graphic.layer === layer &&
+            r.graphic.attributes && (r.graphic.attributes[F.objectId] in OID_TO_INDEX)
+          );
+          if (!hit) return;
+          const oid = hit.graphic.attributes[F.objectId];
+          const idx = OID_TO_INDEX[oid];
+          activateIndex(idx, { scrollIntoView: true, fly: true });
+        });
       });
     }
 
@@ -297,6 +389,10 @@
       scroller
         .setup({ step: "#steps .step", offset: 0.55, order: true })
         .onStepEnter(function (resp) {
+          if (suppressScrollFly) {
+            // a map click triggered this scroll; card is already active + flown
+            return;
+          }
           document.querySelectorAll("#steps .step").forEach(s => s.classList.remove("is-active"));
           resp.element.classList.add("is-active");
           flyTo(feats[+resp.element.dataset.index]);
